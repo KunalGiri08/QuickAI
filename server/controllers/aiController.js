@@ -11,6 +11,7 @@ const AI = new OpenAI({
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
 });
 
+
 export const generateArticle = async (req, res) => {
     try {
 
@@ -25,23 +26,29 @@ export const generateArticle = async (req, res) => {
                 message: "Limit reached. Upgrade to continue."
             })
         }
+        let maxTokens;
+
+        if (length === 800) maxTokens = 1500;
+        else if (length === 1200) maxTokens = 2500;
+        else maxTokens = 3500;
+
         const response = await AI.chat.completions.create({
             model: "gemini-3.5-flash",
             messages: [
                 {
                     role: "user",
                     content: prompt,
-                },
+                }
             ],
             temperature: 0.7,
-            max_tokens: length,
-
+            max_tokens: maxTokens,
         });
 
         const content = response.choices[0].message.content;
 
         await sql`INSERT INTO creations (user_id, prompt, content, type) 
     VALUES (${userId}, ${prompt}, ${content}, 'article')`;
+
         if (plan !== 'premium') {
             await clerkClient.users.updateUserMetadata(userId, {
                 privateMetadata: {
@@ -49,6 +56,8 @@ export const generateArticle = async (req, res) => {
                 }
             });
         }
+        console.log("CONTENT LENGTH:", content.length);
+        console.log(content);
         res.json({
             success: true,
             content
@@ -84,11 +93,10 @@ export const generateBlogTitle = async (req, res) => {
                 {
                     role: "user",
                     content: prompt,
-                },
+                }
             ],
             temperature: 0.7,
-            max_tokens: 100,
-
+            max_tokens: 2000,
         });
 
         const content = response.choices[0].message.content;
@@ -177,7 +185,7 @@ export const removeImageBackground = async (req, res) => {
     try {
 
         const { userId } = req.auth();
-        const { image } = req.file;
+        const image = req.file;
         const plan = req.plan;
 
         if (plan !== 'premium') {
@@ -219,7 +227,7 @@ export const removeImageObject = async (req, res) => {
 
         const { userId } = req.auth();
         const { object } = req.body;
-        const { image } = req.file;
+        const image = req.file;
         const plan = req.plan;
 
         if (plan !== 'premium') {
@@ -282,7 +290,7 @@ export const resumeReview = async (req, res) => {
         const prompt = `Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement. Resume Content:\n\n${pdfData.text}`
 
         const response = await AI.chat.completions.create({
-            model: "gemini-2.0-flash",
+            model: "gemini-3.5-flash",
             messages: [
                 {
                     role: "user",
@@ -290,10 +298,10 @@ export const resumeReview = async (req, res) => {
                 }
             ],
             temperature: 0.7,
-            max_tokens: 1000,
+            max_tokens: 4000,
         });
-     
-         const content = response.choices[0].message.content;
+
+        const content = response.choices[0].message.content;
 
         await sql`  INSERT INTO creations (user_id, prompt, content, type)
     VALUES (${userId},  'Review the uploaded resume', ${content}, 'resume_review')`;
