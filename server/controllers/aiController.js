@@ -28,9 +28,9 @@ export const generateArticle = async (req, res) => {
         }
         let maxTokens;
 
-        if (length === 800) maxTokens = 1500;
-        else if (length === 1200) maxTokens = 2500;
-        else maxTokens = 3500;
+        if (length === 800) maxTokens = 3000;
+        else if (length === 1200) maxTokens = 4000;
+        else maxTokens = 5000;
 
         const response = await AI.chat.completions.create({
             model: "gemini-3.5-flash",
@@ -117,10 +117,10 @@ export const generateBlogTitle = async (req, res) => {
 
 
     } catch (error) {
-        console.error("Error generating article:", error);
+        console.error("Error generating blog title:", error);
         res.json({
             success: false,
-            message: "Failed to generate article."
+            message: "Failed to generate blog title."
         })
     }
 }
@@ -173,7 +173,7 @@ export const generateImage = async (req, res) => {
 
 
     } catch (error) {
-        console.error("Error generating article:", error);
+        console.error("Error generating image:", error);
         res.json({
             success: false,
             message: error.message
@@ -214,7 +214,7 @@ export const removeImageBackground = async (req, res) => {
 
 
     } catch (error) {
-        console.error("Error generating article:", error);
+        console.error("Error removing background from image:", error);
         res.json({
             success: false,
             message: error.message
@@ -255,7 +255,7 @@ export const removeImageObject = async (req, res) => {
 
 
     } catch (error) {
-        console.error("Error generating article:", error);
+        console.error("Error removing object from image:", error);
         res.json({
             success: false,
             message: error.message
@@ -313,7 +313,7 @@ export const resumeReview = async (req, res) => {
 
 
     } catch (error) {
-        console.error("Error generating article:", error);
+        console.error("Error reviewing resume:", error);
         res.json({
             success: false,
             message: error.message
