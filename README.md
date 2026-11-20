@@ -177,10 +177,11 @@ flowchart TD
     UI --> Axios
     Axios -- "HTTP + JWT" --> ServerCore
     ServerCore --> AuthGlobal
-    AuthGlobal --> AuthTier
+    AuthGlobal -- "JSON Routes" --> AuthTier
+    AuthGlobal -- "Multipart Routes" --> MulterStorage
+    MulterStorage --> AuthTier
     AuthTier --> AICtrl
     AuthTier --> UserCtrl
-    AICtrl --> MulterStorage
 
     AICtrl -- "Prompts" --> Gemini
     AICtrl -- "Image Prompts" --> Clipdrop
@@ -424,6 +425,8 @@ For environment setup checklists, build configurations, and CORS rules, refer to
 - [ ] **Export Options**: Add one-click export of generated articles and resume reviews to PDF and DOCX formats.
 - [ ] **Multi-Format Resume Support**: Extend the resume reviewer to parse Microsoft Word documents (`.docx`).
 - [ ] **Rate Limiting**: Introduce Redis-backed IP/user rate limiting (e.g., via Upstash or express-rate-limit) to guard against burst traffic.
+- [ ] **Temporary Upload Cleanup**: Add post-processing unlinking (`fs.unlink`) of Multer temporary files to prevent server disk accumulation.
+- [ ] **Server-Side Input Sanitization**: Implement backend validation for single-word object removal and strict file MIME-type inspection.
 
 ---
 

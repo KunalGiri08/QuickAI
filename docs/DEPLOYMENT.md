@@ -97,6 +97,16 @@ app.use(cors({
 }));
 ```
 
+### 4.4 Temporary Upload Storage & Disk Lifecycle
+Multer is configured using default disk storage (`multer.diskStorage({})` in `server/configs/multer.js`), which buffers incoming multipart image and resume files directly into the operating system's temporary directory. In the current backend implementation, uploaded files (`image.path`, `resume.path`) are not explicitly removed with `fs.unlink()` after Cloudinary uploads or PDF text extraction.
+
+In containerized or persistent production environments (e.g., Render, Railway, AWS EC2):
+- **Disk Accumulation**: Uploaded media will steadily accumulate over time, potentially leading to container disk exhaustion.
+- **Production Recommendations**:
+  1. *Immediate Post-Processing Cleanup*: Implement explicit `fs.promises.unlink(file.path).catch(...)` in controller handlers or `res.on('finish')` hooks.
+  2. *OS-Level Cleanup / Cron*: For server instances, configure a periodic `tmpwatch` or `systemd-tmpfiles` job to purge files in `/tmp` older than 1 hour.
+  3. *Ephemeral Container Restarts*: Relying on container restarts or ephemeral disks provides temporary relief but does not substitute for application-level unlinking.
+
 ---
 
 ## 5. Pre-Launch Verification Checklist

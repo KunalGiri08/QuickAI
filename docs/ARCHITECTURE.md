@@ -23,15 +23,16 @@ flowchart TD
     subgraph ServerLayer ["Server Layer (Express 5.x REST API)"]
         ExpressApp["Express Application"]
         GlobalAuth["clerkMiddleware & requireAuth"]
+        MulterMiddleware["Multer Disk Storage (File Routes)"]
         CustomAuth["Custom Tier & Quota Middleware (auth.js)"]
         AiController["AI Controller (aiController.js)"]
         UserController["User Controller (userController.js)"]
-        Multer["Multer File Upload Middleware"]
     end
 
     subgraph DataLayer ["Data & Storage Layer"]
         NeonDB[("Neon Serverless PostgreSQL")]
         CloudinaryStorage["Cloudinary Media Cloud"]
+        LocalStorage["Local Disk (Multer Temp Uploads)"]
     end
 
     subgraph ExternalAIServices ["External AI Service Providers"]
@@ -48,11 +49,16 @@ flowchart TD
     %% Server Middleware Flow
     ExpressApp --> GlobalAuth
     GlobalAuth -. "Validate Session" .-> ClerkService
-    GlobalAuth --> CustomAuth
+
+    %% Route Dispatches
+    GlobalAuth -- "JSON Routes" --> CustomAuth
+    GlobalAuth -- "Multipart Routes (upload.single)" --> MulterMiddleware
+    MulterMiddleware --> LocalStorage
+    MulterMiddleware -- "Parsed req.file" --> CustomAuth
+
     CustomAuth -. "Read / Update Metadata" .-> ClerkService
     CustomAuth --> AiController
     CustomAuth --> UserController
-    AiController --> Multer
 
     %% Backend integrations
     AiController -- "Text & Resume Review Prompts" --> GeminiAI
@@ -86,8 +92,12 @@ flowchart TD
   - `express.json()`: JSON payload parser.
   - `clerkMiddleware()`: Attaches session inspection functions to `req.auth()`.
   - `requireAuth()`: Enforces authentication across all API routes under `/api/*`.
-  - `auth` (`server/middlewares/auth.js`): Inspects subscription tiers, updates user metadata, and manages free-tier generation quotas.
   - `upload` (`server/configs/multer.js`): Multer disk storage handler for handling multipart form file uploads (images and PDF resumes).
+    > [!IMPORTANT]
+    > **Middleware Execution Order**: On multipart file routes (`/remove-image-background`, `/remove-image-object`, and `/resume-review`), Multer's `upload.single(...)` is mounted **before** the `auth` middleware in `server/routes/aiRoutes.js`. This means incoming multipart payloads are buffered and written to the server's local disk before user subscription tier verification or free quota checks are executed.
+    >
+    > **Temporary File Handling**: Multer utilizes local disk storage (`multer.diskStorage({})`) storing files in the OS temporary directory. Uploaded files (`image.path`, `resume.path`) are currently not explicitly unlinked via `fs.unlink()` after processing, resulting in disk accumulation over time on long-running servers.
+  - `auth` (`server/middlewares/auth.js`): Inspects subscription tiers, updates user metadata, and manages free-tier generation quotas.
 - **Controllers**:
   - `aiController.js`: Dispatches tasks to Gemini, Clipdrop, Cloudinary, and PDF parsers.
   - `userController.js`: Manages user creations, public community creations, and like toggles.
@@ -134,7 +144,8 @@ sequenceDiagram
 3. **Payload Dispatch**: An HTTP POST request is sent to `/api/ai/generate-article` or `/api/ai/generate-blog-title`.
 4. **Auth & Quota Inspection**:
    - `auth` middleware verifies whether the user holds a `premium` plan.
-   - If `free`, the system verifies whether `free_usage < 10`. If the limit is reached, a `403`/error response is returned (`"Limit reached. Upgrade to continue."`).
+   - If `free`, the system verifies whether `free_usage < 10`. If the limit is reached, the server returns an **HTTP 200 OK** response with an application-level failure payload: `{ success: false, message: "Limit reached. Upgrade to continue." }`.
+   - *Architecture Note on Error Handling*: The application distinguishes between **transport-level errors** (e.g., missing/invalid JWT tokens, which Clerk's `requireAuth()` rejects with HTTP 401 Unauthorized) and **application-level business logic failures** (e.g., quota exhaustion or tier restrictions, which controllers return as HTTP 200 with `{ success: false, message: "..." }`).
 5. **AI Execution**:
    - Token limits are dynamically calculated (Short: 3000 tokens, Medium: 4000 tokens, Long: 5000 tokens).
    - An OpenAI client configured with the Google Generative Language endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`) invokes `gemini-3.5-flash`.
@@ -179,8 +190,9 @@ sequenceDiagram
 
 #### B. AI Background Removal
 1. Route: `POST /api/ai/remove-image-background` (Requires `premium` plan).
-2. Multer intercepts the multipart file upload (`image`) and saves it temporarily to local disk.
-3. The server sends the file path to Cloudinary with transformation instructions:
+2. **Multipart Ingestion**: Multer's `upload.single('image')` intercepts the multipart file upload first, persisting the binary to a temporary file on local disk (`image.path`).
+3. **Authorization & Tier Guard**: The `auth` middleware verifies session and checks `req.plan === 'premium'`. If non-premium, an HTTP 200 application failure `{ success: false, message: "This feature is for premium users only..." }` is returned (note: the uploaded file remains on disk).
+4. The server sends the file path to Cloudinary with transformation instructions:
    ```javascript
    {
        transformation: [{
@@ -189,33 +201,34 @@ sequenceDiagram
        }]
    }
    ```
-4. Cloudinary applies the background removal AI model and hosts the isolated PNG.
-5. The result URL is recorded in Neon DB and returned to the client.
+5. Cloudinary applies the background removal AI model and hosts the isolated PNG.
+6. The result URL is recorded in Neon DB and returned to the client. (Temporary file on disk is not explicitly unlinked post-upload).
 
 #### C. AI Object Removal
 1. Route: `POST /api/ai/remove-image-object` (Requires `premium` plan).
-2. The user submits an image file and the name of a single object (e.g., `"spoon"`).
-3. The image is uploaded to Cloudinary to generate a unique `public_id`.
-4. A transformed URL is dynamically constructed:
+2. **Multipart Ingestion**: Multer intercepts the file upload (`image`) and writes it to disk before `auth` middleware verifies the `premium` plan.
+3. The user submits the image and single object name (e.g., `"spoon"`).
+4. The image is uploaded to Cloudinary to generate a unique `public_id`.
+5. A transformed URL is dynamically constructed:
    ```javascript
    cloudinary.url(public_id, {
        transformation: [{ effect: `gen_remove:${object}` }],
        resource_type: 'image'
    })
    ```
-5. Cloudinary processes generative inpainting on-the-fly upon URL access.
-6. The URL is stored in `creations` and returned to the frontend.
+6. Cloudinary processes generative inpainting on-the-fly upon URL access.
+7. The URL is stored in `creations` and returned to the frontend. (Temporary file on disk is not explicitly unlinked post-upload).
 
 ### 3.4 Resume Review Workflow
 
 1. Route: `POST /api/ai/resume-review` (Requires `premium` plan).
-2. Multer processes the multipart file upload (`resume`).
+2. **Multipart Ingestion**: Multer intercepts and writes the `resume` PDF to local disk before `auth` tier validation.
 3. File size is checked (`resume.size <= 5MB`).
 4. The file buffer is parsed into raw text using `pdf-parse`.
 5. A structured prompt is synthesized:
    `"Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement. Resume Content:\n\n${pdfData.text}"`
 6. Sent to `gemini-3.5-flash` with `max_tokens: 4000`.
-7. Output analysis is persisted in the database with `type: 'resume_review'` and returned to the frontend.
+7. Output analysis is persisted in the database with `type: 'resume_review'` and returned to the frontend. (Temporary file on disk is not explicitly unlinked post-upload).
 
 ---
 
@@ -228,3 +241,4 @@ sequenceDiagram
 | **OpenAI Adapter for Gemini** | `new OpenAI({ baseURL: "https://generativelanguage.../openai/" })` | Leverages standardized OpenAI client libraries while benefiting from Gemini 3.5 Flash pricing, context window, and performance. |
 | **Cloudinary Generative AI** | Cloudinary URL Transformations (`gen_remove`, `background_removal`) | Avoids self-hosting complex computer vision pipelines or multi-gigabyte models; leverages edge CDN distribution. |
 | **Clerk Native Metadata** | `user.privateMetadata.free_usage` | Removes the need for separate user tables or Redis quota stores; user state and subscription entitlement remain synchronized within the auth provider. |
+| **Multipart Upload Sequencing** | `upload.single(...)` mounted before `auth` | Multer processes and validates the multipart stream ahead of controller logic. As a future improvement, post-processing cleanup via `fs.unlink` is recommended to prevent disk accumulation. |

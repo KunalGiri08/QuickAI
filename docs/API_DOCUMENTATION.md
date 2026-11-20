@@ -17,7 +17,8 @@ All routes under `/api/*` are guarded by Clerk authentication (`clerkMiddleware(
 Authorization: Bearer <clerk_session_jwt_token>
 ```
 
-### 1.3 Response Format
+### 1.3 Response Format & Error Status Code Conventions
+
 All API responses adhere to a consistent JSON envelope structure:
 
 ```json
@@ -28,7 +29,7 @@ All API responses adhere to a consistent JSON envelope structure:
 }
 ```
 
-In the event of an error:
+In the event of an application-level or business-logic error:
 
 ```json
 {
@@ -36,6 +37,11 @@ In the event of an error:
   "message": "Detailed error message"
 }
 ```
+
+> [!IMPORTANT]
+> **HTTP Status Codes vs. Application Errors**:
+> - **Transport & Authentication Errors (HTTP 401)**: Missing or invalid Clerk JWT tokens are rejected at the gateway level by Clerk's `requireAuth()` middleware with **HTTP 401 Unauthorized**.
+> - **Application-Level & Business-Logic Failures (HTTP 200)**: Controlled business logic rejections (such as free usage limit reached, premium subscription required, file size limit exceeded, or resource not found) are returned with **HTTP 200 OK** containing `{ "success": false, "message": "..." }`. The React frontend inspects `data.success` to display error toasts. Unless an unhandled exception occurs, the server does not emit HTTP 403 or 400 status codes for handled business logic rejections.
 
 ---
 
@@ -274,6 +280,9 @@ curl -X POST http://localhost:3000/api/ai/remove-image-background \
 | `image` | Binary File | Yes | Image file uploaded as multipart form data. |
 | `object` | String | Yes | Name of a single object to remove (e.g., `watch`, `car`, `chair`). |
 
+> [!NOTE]
+> **Validation Architecture**: The restriction that the `object` field contain only a single object name (`object.split(' ').length > 1`) is currently enforced exclusively on the frontend (`client/src/pages/RemoveObjects.jsx`). The Express backend controller (`server/controllers/aiController.js`) accepts `req.body.object` directly without word-count validation. Implementing server-side string sanitation and single-token validation is recommended as a future security enhancement.
+
 **Success Response (200 OK)**:
 ```json
 {
@@ -282,7 +291,7 @@ curl -X POST http://localhost:3000/api/ai/remove-image-background \
 }
 ```
 
-**Error Response**:
+**Application Error Response (200 OK with `success: false`)**:
 ```json
 {
   "success": false,
@@ -313,6 +322,9 @@ curl -X POST http://localhost:3000/api/ai/remove-image-object \
 |---|---|---|---|
 | `resume` | Binary File | Yes | PDF document (must be `application/pdf`, max size: 5MB). |
 
+> [!NOTE]
+> **Validation Architecture**: The document format restriction to PDF (`accept="application/pdf"`) is enforced by the client file input interface (`client/src/pages/ReviewResume.jsx`). On the backend, file size is strictly checked (`resume.size <= 5MB`), while format validation relies on `pdf-parse` throwing a runtime exception caught in the controller's `try...catch` block if a non-PDF file is supplied directly. Explicit server-side MIME-type and magic-byte validation is recommended as a future security enhancement.
+
 **Success Response (200 OK)**:
 ```json
 {
@@ -321,7 +333,7 @@ curl -X POST http://localhost:3000/api/ai/remove-image-object \
 }
 ```
 
-**Error Responses**:
+**Application Error Responses (200 OK with `success: false`)**:
 - File size exceeds 5MB:
   ```json
   {
